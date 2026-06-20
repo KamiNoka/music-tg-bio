@@ -7,8 +7,8 @@ CONFIG_PATH = Path(__file__).parent / "config.json"
 # Дефолтная конфигурация. Порядок sources = приоритет источников.
 DEFAULT_CONFIG = {
     "telegram": {"api_id": 0, "api_hash": ""},
-    # Discord Rich Presence (две строки) — отдельный выход, локально через клиент Discord
-    "discord": {"enabled": False, "client_id": ""},
+    # Discord-выход. mode: off | presence (Rich Presence, локально) | status (Custom Status, HTTP).
+    "discord": {"mode": "off", "client_id": "", "user_token": ""},
     "bio_template": "🎧 {track}",
     "bio_idle": "",
     "interval": 20,
