@@ -1,0 +1,5 @@
+telethon
+spotipy
+yandex-music
+flask
+pypresence
