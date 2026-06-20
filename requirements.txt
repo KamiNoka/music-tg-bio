@@ -1,12 +1,12 @@
-# Базовые
+flask
+gunicorn
 telethon
 spotipy
-flask
+sqlalchemy
+psycopg[binary]
+requests
 pypresence
-
-# Яндекс через Ynison (realtime now-playing с любого устройства).
-# Нужна git-версия yandex-music с extra [ynison] — на PyPI 3.0.0 ynison ещё нет.
-#   pip install --no-build-isolation "yandex-music[ynison] @ git+https://github.com/MarshalX/yandex-music-api.git"
+# Яндекс через Ynison (realtime now-playing). git-версия с extra [ynison].
 websockets
 betterproto
-# yandex-music[ynison] @ git+https://github.com/MarshalX/yandex-music-api.git
+yandex-music[ynison] @ git+https://github.com/MarshalX/yandex-music-api.git

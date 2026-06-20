@@ -1,87 +1,61 @@
 # music-tg-bio
 
-Меняет bio твоего Telegram-аккаунта на трек, который сейчас играет.
-Несколько источников с приоритетом, веб-интерфейс настройки и консольный режим для сервера.
+Персональный веб-сервис: показывает текущий трек в **bio Telegram** и/или в **Discord**,
+ведёт **историю прослушиваний**, статистику и публичную страницу «что я слушаю».
+Доступ к управлению — через вход по Telegram.
 
-## Источники
+## Архитектура
 
-| Источник | Откуда ловит | Ограничения |
+Два процесса вокруг общей БД:
+- **web** (Flask) — интерфейс, авторизация, настройки, история, публичная страница.
+- **worker** — опрашивает источники и пишет в выходы; управляется флагом из веба.
+- **БД** — Postgres (`DATABASE_URL`) в облаке, SQLite (`data.db`) локально.
+
+### Источники → где работают
+| | Облако | Дома |
 |---|---|---|
-| **Spotify** | облако, с любого устройства (телефон, веб, десктоп) | нужно своё приложение на developer.spotify.com |
-| **Яндекс Музыка** | облако через **Ynison** — с любого устройства (телефон, десктоп, веб) | в РФ домены/бэкенд могут быть заблокированы (см. ниже) |
-| **MPRIS** | локально, любой плеер на этой Linux-машине (вкл. SoundCloud в браузере) | только на машине с графикой, не на VPS/телефоне |
+| Spotify (облако) | ✅ | ✅ |
+| Яндекс (Ynison) | ✅ | ✅ |
+| MPRIS (локальный плеер) | ❌ | ✅ |
 
-Движок опрашивает включённые источники **по приоритету** (порядок в настройках) и берёт
-первый, где реально что-то играет.
+### Выходы
+- **Telegram bio** — одна строка по шаблону (`🎧 {track}`, можно текст до/после).
+- **Discord Custom Status** («мысль» у ника) — через user-токен (⚠ selfbot, риск бана), работает в облаке.
+- **Discord Rich Presence** — «Слушает …» под ником, только дома (нужен локальный Discord).
 
-## Выходы
-
-- **Telegram bio** — одна строка по шаблону (`🎧 {track}`).
-- **Discord Rich Presence** — две строки (трек + исполнитель), обе меняются. Локально, нужен
-  запущенный десктоп-клиент Discord и Application ID с `discord.com/developers`. Telegram при
-  этом работает как раньше. На VPS недоступно (presence — локальная штука).
-
-## Зависимости
-
-- `playerctl` (системный, для MPRIS): `sudo pacman -S playerctl`
-- Python-пакеты: `./venv/bin/pip install -r requirements.txt` (уже стоят в `venv/`)
-
-## Запуск (веб-интерфейс)
+## Локальный запуск
 
 ```bash
-./venv/bin/python app.py
+./venv/bin/pip install -r requirements.txt   # ynison-зависимости: см. ниже
+DEV_LOGIN=1 OWNER_TELEGRAM_ID=<твой id> SECRET_KEY=dev ./venv/bin/python app.py web
+./venv/bin/python app.py worker              # в отдельном терминале
 ```
-Откроется `http://127.0.0.1:8765`. Там:
-1. Введи Telegram `api_id`/`api_hash` (с `my.telegram.org` → API development tools), **Сохрани**.
-2. Войди в Telegram (телефон → код → пароль 2FA при наличии).
-3. Включи нужные источники и авторизуй их (Spotify — кнопка, Яндекс — кнопка с кодом).
-4. Нажми **▶ Старт**.
+Локально вход — кнопкой «Dev-вход» (виджет Telegram не работает на localhost).
 
-### Spotify
-Создай приложение на https://developer.spotify.com/dashboard, в Redirect URI впиши
-`http://127.0.0.1:8765/spotify/callback`. `client_id`/`secret` вставь в настройки и нажми
-«Подключить Spotify».
+Команды: `app.py web` | `app.py worker` | `app.py setup` (визард для VPS) | `app.py login`.
 
-## Запуск на сервере (VPS, без графики)
+## Деплой на Railway
 
+1. Создай проект, подключи плагин **PostgreSQL** (даст `DATABASE_URL`).
+2. Переменные окружения:
+   - `SECRET_KEY` — случайная строка (Flask session).
+   - `BOT_TOKEN`, `BOT_USERNAME` — бот из BotFather; `/setdomain` = домен Railway (для Telegram-входа).
+   - `OWNER_TELEGRAM_ID` — твой Telegram id (первый вход застолбит владельца).
+3. `Procfile` поднимает два процесса: `web` (gunicorn) и `worker`.
+4. Spotify Redirect URI и домен Telegram-бота: `https://<app>.up.railway.app/...`.
+5. Telegram-сессию задать: войти в вебе (телефон→код→2FA) — StringSession сохранится в БД.
+
+Перенос на свой VPS позже — те же два процесса (systemd) + локальный Postgres/SQLite.
+
+## Яндекс через Ynison
+Нужна git-версия `yandex-music[ynison]` (на PyPI пока нет ynison):
 ```bash
-python app.py setup    # консольный визард: Telegram, Spotify, Яндекс, bio
-python app.py run      # headless-движок (заворачивается в systemd)
+pip install --no-build-isolation "yandex-music[ynison] @ git+https://github.com/MarshalX/yandex-music-api.git"
 ```
-На VPS источник MPRIS бессмысленен (нет локального плеера) — используй Spotify/Яндекс.
-
-## Команды
-
-| Команда | Что делает |
-|---|---|
-| `python app.py` / `web` | веб-интерфейс |
-| `python app.py setup` | настройка в терминале |
-| `python app.py run` | запуск без графики |
-| `python app.py login` | только вход в Telegram |
-
-## Настройки (config.json)
-
-Создаётся автоматически. Поля: `telegram.api_id/api_hash`, `bio_template` (`{track}` = трек),
-`bio_idle` (что в bio при тишине), `interval` (сек, ≥10 — Telegram банит за частую смену),
-`bio_max_len` (70, или 140 для Premium), `sources` (список источников, порядок = приоритет).
-
-## Яндекс через Ynison (нюансы РФ)
-
-Ynison — внутренний протокол Яндекса для синхронизации воспроизведения между устройствами
-(аналог Spotify Connect). Видит, что играет на телефоне, без скробблеров.
-
-- Нужна **git-версия** `yandex-music` с extra `[ynison]` (на PyPI пока нет):
-  ```bash
-  pip install --no-build-isolation "yandex-music[ynison] @ git+https://github.com/MarshalX/yandex-music-api.git"
-  ```
-- Провайдер сам резолвит хосты Яндекса через **DoH** (Cloudflare) и форсирует IPv4 —
-  это обходит блокировку доменов в системном DNS и отсутствие IPv6.
-- Если ynison-бэкенд режется DPI (TCP timeout) — нужен активный **обход/VPN**, покрывающий Яндекс.
-- Если pip не может скачать пакеты (pypi.org заблокирован), пропиши IP в `/etc/hosts`
-  (резолвится через DoH).
+В РФ домены/бэкенд Яндекса могут блокироваться — провайдер сам резолвит через DoH и форсит IPv4;
+при DPI-блокировке нужен обход/VPN. (На Railway за границей блокировок нет.)
 
 ## Заметки
-
-- bio меняется у **user-аккаунта** (не бота) — нужен вход под своим номером.
-- Telegram ограничивает частоту смены профиля, поэтому интервал ≥ 10 сек.
-- Сессия Telegram хранится в `tg_session.session` (разовый вход).
+- bio меняется у **user-аккаунта** (не бота) — вход под своим номером, сессия в БД (StringSession).
+- Интервал ≥ 10 сек — Telegram банит за частую смену профиля.
+- Точка отката: git-тег `checkpoint-local-v1` (стабильная локальная версия до веб-рефактора).
