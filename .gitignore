@@ -4,3 +4,4 @@ config.json
 *.session
 *.session-journal
 __pycache__/
+graphify-out/
