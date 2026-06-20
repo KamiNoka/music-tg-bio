@@ -5,6 +5,7 @@ import threading
 from telethon import TelegramClient
 from telethon.tl.functions.account import UpdateProfileRequest
 
+from config import load_config
 from providers import build_providers
 
 SESSION_NAME = "tg_session"
@@ -96,6 +97,14 @@ class Engine:
         last_discord = object()  # sentinel, чтобы первый трек точно отправился
         try:
             while not self._stop.is_set():
+                # перечитываем настройки на лету: правки шаблона bio / текста тишины /
+                # интервала применяются без перезапуска движка (раньше это был баг)
+                fresh = load_config()
+                config["bio_template"] = fresh.get("bio_template", config.get("bio_template", "🎧 {track}"))
+                config["bio_idle"] = fresh.get("bio_idle", config.get("bio_idle", ""))
+                config["bio_max_len"] = fresh.get("bio_max_len", config.get("bio_max_len", 70))
+                interval = max(10, int(fresh.get("interval", interval)))
+
                 track, source = None, None
                 # опрашиваем источники по приоритету, берём первый играющий
                 for p in providers:
