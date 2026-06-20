@@ -1,44 +1,109 @@
-# Веб-GUI на Flask: настройка источников, авторизация, запуск движка.
+# Веб-интерфейс: дашборд, авторизация через Telegram, настройки в БД,
+# история/статистика, публичная страница. Движок крутится отдельным процессом (worker.py),
+# web управляет им флагом running в БД.
+import os
 import threading
+from datetime import datetime, timedelta, timezone
 
 from flask import Flask, jsonify, redirect, render_template, request
 
-from config import get_source, load_config, save_config
-from engine import Engine
+import auth
+import settings_store as st
+from auth import login_required
 from providers.spotify import make_oauth
 from providers.yandex import device_auth
 from telegram_auth import TelegramAuth, is_authorized
 
 app = Flask(__name__)
-engine = Engine()
+app.secret_key = os.getenv("SECRET_KEY", "dev-secret-change-me")
+
+st.ensure_db()
 
 # Состояние авторизаций (для polling со страницы)
 yandex_state = {"status": "idle", "url": "", "code": "", "error": ""}
 tg_auth: TelegramAuth | None = None
 tg_state = {"step": "idle", "user": "", "error": ""}
 
-# Кеш проверки авторизации Telegram: сессию открываем максимум один раз (иначе database is locked).
-_tg_session_cache = {"checked": False, "value": None}
-_tg_check_lock = threading.Lock()
+WORKER_ALIVE_SEC = 30  # воркер считается живым, если heartbeat свежее
 
 
-# ---------- Главная страница и сохранение ----------
+def _worker_alive(current: dict) -> bool:
+    hb = current.get("heartbeat")
+    if not hb:
+        return False
+    if hb.tzinfo is None:
+        hb = hb.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - hb < timedelta(seconds=WORKER_ALIVE_SEC)
+
+
+# ---------- Авторизация ----------
+
+@app.route("/login")
+def login():
+    if auth.is_logged_in():
+        return redirect("/")
+    return render_template("login.html", bot_username=auth.BOT_USERNAME, dev=auth.DEV_LOGIN)
+
+
+@app.route("/auth/telegram")
+def auth_telegram():
+    data = request.args.to_dict()
+    if auth.try_login(data):
+        return redirect("/")
+    return "Доступ запрещён или подпись неверна", 403
+
+
+@app.route("/dev-login")
+def dev_login_route():
+    if auth.dev_login():
+        return redirect("/")
+    return "DEV_LOGIN выключен", 403
+
+
+@app.route("/logout")
+def logout():
+    auth.logout()
+    return redirect("/login")
+
+
+# ---------- Дашборд и страницы ----------
 
 @app.route("/")
+@login_required
 def index():
-    return render_template("index.html", config=load_config())
+    return render_template("dashboard.html", config=st.get_settings(), user=request_user())
 
+
+@app.route("/history")
+@login_required
+def history_page():
+    return render_template("history.html", user=request_user())
+
+
+@app.route("/public")
+def public_page():
+    return render_template("public.html")
+
+
+def request_user() -> str:
+    from flask import session
+    return session.get("user_name", "")
+
+
+# ---------- Сохранение настроек ----------
 
 @app.route("/save", methods=["POST"])
+@login_required
 def save():
-    config = load_config()
+    config = st.get_settings()
     f = request.form
 
     config["telegram"]["api_id"] = int(f.get("api_id") or 0)
     config["telegram"]["api_hash"] = f.get("api_hash", "").strip()
     config.setdefault("discord", {})
-    config["discord"]["enabled"] = f.get("discord_enabled") == "on"
+    config["discord"]["mode"] = f.get("discord_mode", "off")
     config["discord"]["client_id"] = f.get("discord_client_id", "").strip()
+    config["discord"]["user_token"] = f.get("discord_user_token", "").strip()
     config["bio_template"] = f.get("bio_template", "🎧 {track}")
     config["bio_idle"] = f.get("bio_idle", "")
     config["interval"] = int(f.get("interval") or 20)
@@ -51,21 +116,20 @@ def save():
             src["client_id"] = f.get("spotify_client_id", "").strip()
             src["client_secret"] = f.get("spotify_client_secret", "").strip()
         elif t == "yandex":
-            # токен обычно ставится кнопкой авторизации, но разрешаем и ручной ввод
             manual = f.get("yandex_token", "").strip()
             if manual:
                 src["token"] = manual
         elif t == "mpris":
             src["player_filter"] = f.get("mpris_player_filter", "").strip()
 
-    save_config(config)
+    st.save_settings(config)
     return redirect("/")
 
 
 @app.route("/reorder")
+@login_required
 def reorder():
-    """Меняет приоритет источника: ?type=spotify&dir=up|down."""
-    config = load_config()
+    config = st.get_settings()
     srcs = config["sources"]
     t = request.args.get("type")
     direction = request.args.get("dir")
@@ -74,84 +138,83 @@ def reorder():
         j = i - 1 if direction == "up" else i + 1
         if 0 <= j < len(srcs):
             srcs[i], srcs[j] = srcs[j], srcs[i]
-            save_config(config)
+            st.save_settings(config)
     return redirect("/")
 
 
 # ---------- Spotify OAuth ----------
 
 @app.route("/spotify/login")
+@login_required
 def spotify_login():
-    config = load_config()
-    src = get_source(config, "spotify")
+    config = st.get_settings()
+    src = next((s for s in config["sources"] if s["type"] == "spotify"), None)
     if not (src and src.get("client_id") and src.get("client_secret")):
         return "Сначала сохрани client_id и client_secret Spotify", 400
-    oauth = make_oauth(src["client_id"], src["client_secret"])
-    return redirect(oauth.get_authorize_url())
+    return redirect(make_oauth(src["client_id"], src["client_secret"]).get_authorize_url())
 
 
 @app.route("/spotify/callback")
+@login_required
 def spotify_callback():
-    config = load_config()
-    src = get_source(config, "spotify")
+    config = st.get_settings()
+    src = next((s for s in config["sources"] if s["type"] == "spotify"), None)
     code = request.args.get("code")
-    if not code:
-        return redirect("/")
-    oauth = make_oauth(src["client_id"], src["client_secret"])
-    token_info = oauth.get_access_token(code, check_cache=False)
-    src["refresh_token"] = token_info["refresh_token"]
-    src["enabled"] = True
-    save_config(config)
+    if code and src:
+        oauth = make_oauth(src["client_id"], src["client_secret"])
+        token_info = oauth.get_access_token(code, check_cache=False)
+        src["refresh_token"] = token_info["refresh_token"]
+        src["enabled"] = True
+        st.save_settings(config)
     return redirect("/")
 
 
 # ---------- Яндекс device flow ----------
 
 @app.route("/yandex/login", methods=["POST"])
+@login_required
 def yandex_login():
     if yandex_state["status"] == "waiting":
         return jsonify(yandex_state)
     yandex_state.update(status="starting", url="", code="", error="")
 
-    def worker():
+    def worker_thread():
         def on_code(c):
             yandex_state.update(status="waiting", url=c.verification_url, code=c.user_code)
         try:
             token = device_auth(on_code)
-            config = load_config()
-            src = get_source(config, "yandex")
-            src["token"] = token
-            src["enabled"] = True
-            save_config(config)
+            config = st.get_settings()
+            src = next((s for s in config["sources"] if s["type"] == "yandex"), None)
+            if src:
+                src["token"] = token
+                src["enabled"] = True
+                st.save_settings(config)
             yandex_state.update(status="done")
         except Exception as e:
             yandex_state.update(status="error", error=str(e))
 
-    threading.Thread(target=worker, daemon=True).start()
+    threading.Thread(target=worker_thread, daemon=True).start()
     return jsonify(yandex_state)
 
 
-# ---------- Telegram пошаговый логин ----------
+# ---------- Telegram пошаговый логин (StringSession в БД) ----------
 
 @app.route("/tg/send_code", methods=["POST"])
+@login_required
 def tg_send_code():
     global tg_auth
-    config = load_config()
+    config = st.get_settings()
     tg = config["telegram"]
     if not (tg["api_id"] and tg["api_hash"]):
         return jsonify({"step": "error", "error": "Сначала сохрани api_id и api_hash"})
     phone = request.json.get("phone", "").strip()
     try:
-        # закрываем предыдущую попытку входа, чтобы не держать сессию двумя клиентами
         if tg_auth is not None:
             tg_auth.close()
         tg_auth = TelegramAuth(tg["api_id"], tg["api_hash"])
         res = tg_auth.send_code(phone)
-        if res == "already":
-            _tg_session_cache.update(checked=True, value={"ok": True, "name": ""})
-            tg_state.update(step="done", user="(уже авторизован)", error="")
-        else:
-            tg_state.update(step="code", error="")
+        tg_state.update(step="done" if res == "already" else "code",
+                        user="(уже авторизован)" if res == "already" else "", error="")
         return jsonify(tg_state)
     except Exception as e:
         tg_state.update(step="error", error=str(e))
@@ -159,6 +222,7 @@ def tg_send_code():
 
 
 @app.route("/tg/sign_in", methods=["POST"])
+@login_required
 def tg_sign_in():
     if not tg_auth:
         return jsonify({"step": "error", "error": "Сначала запроси код"})
@@ -169,7 +233,6 @@ def tg_sign_in():
         if res == "need_password":
             tg_state.update(step="password", error="")
         elif res.startswith("ok:"):
-            _tg_session_cache.update(checked=True, value={"ok": True, "name": res[3:]})
             tg_state.update(step="done", user=res[3:], error="")
         return jsonify(tg_state)
     except Exception as e:
@@ -177,42 +240,93 @@ def tg_sign_in():
         return jsonify(tg_state)
 
 
-# ---------- Запуск/остановка/статус ----------
+# ---------- Управление воркером ----------
 
 @app.route("/start", methods=["POST"])
+@login_required
 def start():
-    engine.start(load_config())
-    return jsonify(engine.get_status())
+    st.set_running(True)
+    return jsonify({"running": True})
 
 
 @app.route("/stop", methods=["POST"])
+@login_required
 def stop():
-    engine.stop()
-    return jsonify(engine.get_status())
+    st.set_running(False)
+    return jsonify({"running": False})
 
+
+# ---------- API ----------
 
 @app.route("/status")
+@login_required
 def status():
-    st = engine.get_status()
-    # Сессию открываем максимум один раз и только когда она точно свободна:
-    # движок не запущен и не идёт пошаговый логин (иначе SQLite database is locked).
-    login_in_progress = tg_state["step"] in ("code", "password")
-    with _tg_check_lock:
-        if (
-            not _tg_session_cache["checked"]
-            and not engine.is_running()
-            and not login_in_progress
-        ):
-            config = load_config()
-            tg = config["telegram"]
-            if tg["api_id"] and tg["api_hash"]:
-                ok, name = is_authorized(tg["api_id"], tg["api_hash"])
-                _tg_session_cache.update(checked=True, value={"ok": ok, "name": name})
-            # если ключей ещё нет — не помечаем checked, проверим позже
-    return jsonify(
-        {"engine": st, "yandex": yandex_state, "tg_auth": tg_state,
-         "tg_session": _tg_session_cache["value"]}
-    )
+    cur = st.get_current()
+    tg_ok, tg_name = is_authorized(
+        st.get_settings()["telegram"].get("api_id"),
+        st.get_settings()["telegram"].get("api_hash"),
+    ) if not st.get_running() else (None, "")
+    return jsonify({
+        "running": st.get_running(),
+        "worker_alive": _worker_alive(cur),
+        "track": cur["track"],
+        "source": cur["source"],
+        "tg_session": {"ok": tg_ok, "name": tg_name} if tg_ok is not None else None,
+        "yandex": yandex_state,
+        "tg_auth": tg_state,
+    })
+
+
+@app.route("/api/stats")
+@login_required
+def api_stats():
+    return jsonify(_compute_stats())
+
+
+@app.route("/api/public")
+def api_public():
+    cur = st.get_current()
+    return jsonify({
+        "track": cur["track"],
+        "source": cur["source"],
+        "playing": _worker_alive(cur) and bool(cur["track"]),
+        "recent": _recent(10),
+        "top_artists": _top("artist", 5),
+    })
+
+
+def _recent(limit: int):
+    from db import get_session
+    from models import PlayHistory
+    with get_session() as s:
+        rows = s.query(PlayHistory).order_by(PlayHistory.started_at.desc()).limit(limit).all()
+        return [{"track": r.track, "source": r.source,
+                 "at": r.started_at.isoformat() if r.started_at else None} for r in rows]
+
+
+def _top(field: str, limit: int):
+    from sqlalchemy import func
+    from db import get_session
+    from models import PlayHistory
+    col = getattr(PlayHistory, field)
+    with get_session() as s:
+        rows = (s.query(col, func.count().label("c"))
+                .filter(col != "")
+                .group_by(col).order_by(func.count().desc()).limit(limit).all())
+        return [{"name": name, "count": c} for name, c in rows]
+
+
+def _compute_stats():
+    from db import get_session
+    from models import PlayHistory
+    with get_session() as s:
+        total = s.query(PlayHistory).count()
+    return {
+        "total": total,
+        "top_artists": _top("artist", 10),
+        "top_tracks": _top("track", 10),
+        "recent": _recent(20),
+    }
 
 
 def run(host="127.0.0.1", port=8765):

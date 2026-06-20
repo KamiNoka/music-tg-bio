@@ -1,37 +1,33 @@
-# Консольный визард настройки и headless-запуск — для VPS без графики.
-import time
-
-from config import get_source, load_config, save_config
-from engine import Engine
+# Консольный визард настройки — для VPS без графики. Пишет в БД (settings_store).
+from config import get_source
 from providers.spotify import make_oauth
 from providers.yandex import device_auth
+import settings_store as st
 from telegram_auth import cli_login
 
 
 def _ask(prompt: str, default: str = "") -> str:
     suffix = f" [{default}]" if default else ""
-    val = input(f"{prompt}{suffix}: ").strip()
-    return val or default
+    return input(f"{prompt}{suffix}: ").strip() or default
 
 
 def _ask_yes(prompt: str, default: bool = False) -> bool:
     d = "Y/n" if default else "y/N"
     val = input(f"{prompt} ({d}): ").strip().lower()
-    if not val:
-        return default
-    return val in ("y", "yes", "д", "да")
+    return default if not val else val in ("y", "yes", "д", "да")
 
 
 def setup():
-    """Интерактивная настройка в терминале."""
-    config = load_config()
-    print("\n=== Настройка Music → Telegram bio ===\n")
+    """Интерактивная настройка в терминале (сохраняет в БД)."""
+    st.ensure_db()
+    config = st.get_settings()
+    print("\n=== Настройка Music ===\n")
 
     # --- Telegram ---
     print("--- Telegram (my.telegram.org → API development tools) ---")
     config["telegram"]["api_id"] = int(_ask("api_id", str(config["telegram"]["api_id"] or "")) or 0)
     config["telegram"]["api_hash"] = _ask("api_hash", config["telegram"]["api_hash"])
-    save_config(config)
+    st.save_settings(config)
 
     if _ask_yes("Войти в Telegram сейчас?", True):
         try:
@@ -46,22 +42,21 @@ def setup():
     if _ask_yes("Настроить Spotify?", bool(spo.get("refresh_token"))):
         spo["client_id"] = _ask("client_id", spo.get("client_id", ""))
         spo["client_secret"] = _ask("client_secret", spo.get("client_secret", ""))
-        print("В приложении Spotify Redirect URI: http://127.0.0.1:8765/spotify/callback")
+        print("Redirect URI в Spotify: http://127.0.0.1:8765/spotify/callback")
         try:
             oauth = make_oauth(spo["client_id"], spo["client_secret"], open_browser=False)
             print("\n1. Открой на своём компе:\n" + oauth.get_authorize_url())
             resp = _ask("\n2. Вставь URL, куда тебя перенаправило (или код)")
-            code = oauth.parse_response_code(resp)
-            token_info = oauth.get_access_token(code, check_cache=False)
+            token_info = oauth.get_access_token(oauth.parse_response_code(resp), check_cache=False)
             spo["refresh_token"] = token_info["refresh_token"]
             spo["enabled"] = True
             print("✓ Spotify подключён\n")
         except Exception as e:
             print(f"Ошибка Spotify: {e}\n")
-    save_config(config)
+    st.save_settings(config)
 
     # --- Яндекс ---
-    print("--- Яндекс Музыка (облако, надёжно с телефона) ---")
+    print("--- Яндекс Музыка (облако, Ynison) ---")
     yan = get_source(config, "yandex")
     if _ask_yes("Настроить Яндекс?", bool(yan.get("token"))):
         def on_code(c):
@@ -72,57 +67,37 @@ def setup():
             print("✓ Яндекс подключён\n")
         except Exception as e:
             print(f"Ошибка Яндекса: {e}\n")
-    save_config(config)
+    st.save_settings(config)
 
     # --- MPRIS ---
-    print("--- MPRIS (локально, только на машине с графикой) ---")
+    print("--- MPRIS (локально, только дома) ---")
     mp = get_source(config, "mpris")
     mp["enabled"] = _ask_yes("Включить MPRIS?", mp.get("enabled", True))
     if mp["enabled"]:
         mp["player_filter"] = _ask("Фильтр плеера (пусто = любой)", mp.get("player_filter", ""))
-    save_config(config)
+    st.save_settings(config)
 
     # --- Discord ---
-    print("--- Discord Rich Presence (локально, две строки) ---")
-    config.setdefault("discord", {"enabled": False, "client_id": ""})
-    config["discord"]["enabled"] = _ask_yes("Включить Discord?", config["discord"].get("enabled", False))
-    if config["discord"]["enabled"]:
-        config["discord"]["client_id"] = _ask(
-            "Application ID (discord.com/developers)", config["discord"].get("client_id", "")
-        )
-    save_config(config)
+    print("--- Discord ---")
+    config.setdefault("discord", {"mode": "off", "client_id": "", "user_token": ""})
+    print("Режимы: off | status (Custom Status, user-токен, работает в облаке) | presence (RPC, дома)")
+    mode = _ask("Режим Discord", config["discord"].get("mode", "off"))
+    config["discord"]["mode"] = mode
+    if mode == "status":
+        print("⚠ Custom Status через user-токен — против правил Discord, риск бана.")
+        config["discord"]["user_token"] = _ask("User-токен", config["discord"].get("user_token", ""))
+    elif mode == "presence":
+        config["discord"]["client_id"] = _ask("Application ID", config["discord"].get("client_id", ""))
+    st.save_settings(config)
 
     # --- Bio ---
-    print("--- Bio (Telegram, одна строка) ---")
-    config["bio_template"] = _ask("Шаблон ({track} = трек)", config["bio_template"])
+    print("--- Bio (Telegram) ---")
+    config["bio_template"] = _ask("Шаблон ({track} = трек, можно текст до/после)", config["bio_template"])
+    config["bio_idle"] = _ask("Текст при тишине (пусто = убрать)", config.get("bio_idle", ""))
     config["interval"] = int(_ask("Интервал, сек", str(config["interval"])) or 20)
-    save_config(config)
+    st.save_settings(config)
 
-    print("\n✓ Готово. Запуск: python app.py run\n")
+    # запустить движок сразу?
+    st.set_running(_ask_yes("Запустить сейчас (running=on)?", True))
 
-
-def run_headless():
-    """Запуск движка без графики (для systemd на VPS)."""
-    config = load_config()
-    e = Engine()
-    e.start(config)
-    print("[run] движок запущен. Ctrl+C для остановки.")
-
-    last_key, last_err = None, None
-    try:
-        # ждём, пока поток жив; печатаем смену трека и ошибки
-        while True:
-            time.sleep(1)
-            st = e.get_status()
-            if st.get("error") and st["error"] != last_err:
-                print(f"[ошибка] {st['error']}")
-                last_err = st["error"]
-            if not e.is_running():
-                break  # движок завершился сам (ошибка инициализации уже напечатана выше)
-            key = (st.get("track"), st.get("source"))
-            if key != last_key and st.get("track"):
-                print(f"[bio] {st['source']}: {st['track']}")
-                last_key = key
-    except KeyboardInterrupt:
-        print("\n[run] остановка...")
-        e.stop()
+    print("\n✓ Готово. Запуск воркера: python app.py worker  (веб: python app.py web)\n")

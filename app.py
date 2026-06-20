@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
 # Точка входа. Команды:
-#   python app.py            — веб-GUI (открывает браузер)
+#   python app.py            — веб-интерфейс (Flask)
 #   python app.py web        — то же
+#   python app.py worker     — фоновый воркер (опрос источников → выходы)
 #   python app.py setup      — консольная настройка (для VPS)
-#   python app.py run        — headless-запуск движка (для systemd)
-#   python app.py login      — только вход в Telegram (терминал)
+#   python app.py login      — вход в Telegram в терминале
 import sys
 
-USAGE = """Music → Telegram bio
+USAGE = """Music → Telegram bio / Discord
 
 Использование:
   python app.py [web]    веб-интерфейс на http://127.0.0.1:8765
-  python app.py setup    настройка в терминале (для сервера)
-  python app.py run      запуск без графики (для systemd)
+  python app.py worker   фоновый воркер (движок)
+  python app.py setup    настройка в терминале
   python app.py login    войти в Telegram в терминале
+
+Для деплоя обычно: процесс web + процесс worker (см. Procfile).
 """
 
 
@@ -23,7 +25,6 @@ def main():
     if cmd == "web":
         import threading
         import webbrowser
-
         import webapp
 
         url = "http://127.0.0.1:8765"
@@ -31,19 +32,21 @@ def main():
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
         webapp.run()
 
+    elif cmd == "worker":
+        import asyncio
+        import worker
+        asyncio.run(worker.run())
+
     elif cmd == "setup":
         from cli import setup
         setup()
 
-    elif cmd == "run":
-        from cli import run_headless
-        run_headless()
-
     elif cmd == "login":
-        from config import load_config
+        import settings_store as st
         from telegram_auth import cli_login
 
-        tg = load_config()["telegram"]
+        st.ensure_db()
+        tg = st.get_settings()["telegram"]
         if not (tg["api_id"] and tg["api_hash"]):
             print("Сначала задай api_id/api_hash (python app.py setup)")
             return

@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Сейчас играет{% endblock %}
+{% block body %}
+<div style="max-width:460px; margin:6vh auto 0">
+  <div class="card" style="text-align:center; padding:28px">
+    <div class="muted" style="margin-bottom:10px"><span class="dot" id="dot"></span> <span id="state">…</span></div>
+    <div class="track" id="track" style="font-size:24px">—</div>
+    <div class="muted" id="src" style="margin-top:6px"></div>
+  </div>
+
+  <div class="card">
+    <h2>Топ исполнителей</h2>
+    <ul class="list" id="top"></ul>
+  </div>
+
+  <div class="card">
+    <h2>Последние треки</h2>
+    <ul class="list" id="recent"></ul>
+  </div>
+</div>
+{% endblock %}
+
+{% block script %}
+<script>
+function fmt(iso){if(!iso)return'';const d=new Date(iso);return d.toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}
+async function load(){
+  const s=await (await fetch('/api/public')).json();
+  document.getElementById('dot').className='dot'+(s.playing?' on':'');
+  document.getElementById('state').textContent=s.playing?'сейчас играет':'не играет';
+  document.getElementById('track').textContent=s.track||'тишина';
+  document.getElementById('src').textContent=s.source?('источник: '+s.source):'';
+  document.getElementById('top').innerHTML=s.top_artists.map(a=>
+    `<li><span>${a.name}</span><span class="s">${a.count}</span></li>`).join('')||'<li class="s">пока пусто</li>';
+  document.getElementById('recent').innerHTML=s.recent.map(r=>
+    `<li><span>${r.track}</span><span class="s">${fmt(r.at)}</span></li>`).join('')||'<li class="s">пока пусто</li>';
+}
+load(); setInterval(load,5000);
+</script>
+{% endblock %}

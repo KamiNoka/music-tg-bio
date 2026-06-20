@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}История{% endblock %}
+{% block body %}
+<h1>📊 История</h1>
+<p class="sub">Привет, {{ user }} · <a href="/logout" style="color:var(--mut)">выйти</a></p>
+<nav>
+  <a href="/">Дашборд</a>
+  <a href="/history" class="active">История</a>
+  <a href="/public" target="_blank">Публичная ↗</a>
+</nav>
+
+<div class="card">
+  <h2>Всего прослушано</h2>
+  <div class="track" id="total">…</div>
+</div>
+
+<div class="card">
+  <h2>Топ исполнителей</h2>
+  <canvas id="artistsChart" height="200"></canvas>
+</div>
+
+<div class="card">
+  <h2>Топ треков</h2>
+  <ul class="list" id="topTracks"></ul>
+</div>
+
+<div class="card">
+  <h2>Недавнее</h2>
+  <ul class="list" id="recent"></ul>
+</div>
+{% endblock %}
+
+{% block script %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script>
+function fmt(iso){if(!iso)return'';const d=new Date(iso);return d.toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}
+async function load(){
+  const s=await (await fetch('/api/stats')).json();
+  document.getElementById('total').textContent=s.total+' треков';
+  // bar chart топ исполнителей
+  new Chart(document.getElementById('artistsChart'),{
+    type:'bar',
+    data:{labels:s.top_artists.map(a=>a.name),
+      datasets:[{data:s.top_artists.map(a=>a.count),backgroundColor:'rgba(29,185,84,.6)',borderColor:'#1db954',borderWidth:1,borderRadius:6}]},
+    options:{plugins:{legend:{display:false}},
+      scales:{x:{ticks:{color:'#9bb0a4'},grid:{display:false}},y:{ticks:{color:'#9bb0a4'},grid:{color:'rgba(255,255,255,.07)'}}}}
+  });
+  document.getElementById('topTracks').innerHTML=s.top_tracks.map(t=>
+    `<li><span>${t.name}</span><span class="s">${t.count}</span></li>`).join('')||'<li class="s">пока пусто</li>';
+  document.getElementById('recent').innerHTML=s.recent.map(r=>
+    `<li><span>${r.track}</span><span class="s">${fmt(r.at)}</span></li>`).join('')||'<li class="s">пока пусто</li>';
+}
+load();
+</script>
+{% endblock %}

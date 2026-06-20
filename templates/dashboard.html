@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% block title %}Дашборд{% endblock %}
+{% block body %}
+<h1>🎧 Music</h1>
+<p class="sub">Привет, {{ user }} · <a href="/logout" style="color:var(--mut)">выйти</a></p>
+<nav>
+  <a href="/" class="active">Дашборд</a>
+  <a href="/history">История</a>
+  <a href="/public" target="_blank">Публичная ↗</a>
+</nav>
+
+<!-- Статус -->
+<div class="card">
+  <h2>Статус <span class="tag" id="workerTag">…</span></h2>
+  <div style="display:flex; align-items:center; gap:12px">
+    <span class="dot" id="dot"></span>
+    <div style="flex:1">
+      <div class="track" id="track">—</div>
+      <div class="muted" id="srcline">остановлено</div>
+    </div>
+    <button id="startBtn" onclick="ctl('start')">▶ Старт</button>
+    <button class="stop" id="stopBtn" onclick="ctl('stop')">■ Стоп</button>
+  </div>
+</div>
+
+<form method="post" action="/save">
+<!-- Telegram -->
+<div class="card">
+  <h2>Telegram <span class="tag" id="tgTag">проверка…</span></h2>
+  <div class="row">
+    <div><label>api_id</label><input type="number" name="api_id" value="{{ config.telegram.api_id or '' }}"></div>
+    <div><label>api_hash</label><input type="text" name="api_hash" value="{{ config.telegram.api_hash }}"></div>
+  </div>
+  <p class="hint">my.telegram.org → API development tools. После сохранения войди ниже.</p>
+  <hr>
+  <div class="row">
+    <div><label>Телефон</label><input type="text" id="tgPhone" placeholder="+7..."></div>
+    <div style="flex:0; display:flex; align-items:flex-end"><button type="button" class="ghost" onclick="tgSendCode()">Выслать код</button></div>
+  </div>
+  <div id="tgCodeBox" style="display:none"><label>Код из Telegram</label><input type="text" id="tgCode"></div>
+  <div id="tgPassBox" style="display:none"><label>Пароль 2FA</label><input type="password" id="tgPass"></div>
+  <div id="tgSignBox" style="display:none; margin-top:10px"><button type="button" onclick="tgSignIn()">Войти</button></div>
+  <div class="err" id="tgErr"></div><div id="tgDone" style="color:var(--accent)"></div>
+</div>
+
+<!-- Источники -->
+<div class="card">
+  <h2>Источники <span class="tag">порядок = приоритет</span></h2>
+  {% for src in config.sources %}
+  <div style="border:1px solid var(--line); border-radius:12px; padding:12px; margin-bottom:10px">
+    <div style="display:flex; align-items:center; gap:10px">
+      <input type="checkbox" name="{{ src.type }}_enabled" {% if src.enabled %}checked{% endif %}>
+      <span style="font-weight:600; flex:1">
+        {% if src.type=='spotify' %}Spotify <span class="tag">облако · отовсюду</span>
+        {% elif src.type=='yandex' %}Яндекс <span class="tag">облако · Ynison</span>
+        {% else %}MPRIS <span class="tag">локально</span>{% endif %}
+      </span>
+      <a class="btn ghost" style="padding:4px 9px" href="/reorder?type={{ src.type }}&dir=up">↑</a>
+      <a class="btn ghost" style="padding:4px 9px" href="/reorder?type={{ src.type }}&dir=down">↓</a>
+    </div>
+    {% if src.type=='spotify' %}
+      <div class="row"><div><label>client_id</label><input type="text" name="spotify_client_id" value="{{ src.client_id }}"></div>
+      <div><label>client_secret</label><input type="text" name="spotify_client_secret" value="{{ src.client_secret }}"></div></div>
+      <p class="hint">Redirect URI в Spotify: <code>{{ request.host_url }}spotify/callback</code></p>
+      <a class="btn ghost" href="/spotify/login">{% if src.refresh_token %}✓ переподключить{% else %}Подключить Spotify{% endif %}</a>
+    {% elif src.type=='yandex' %}
+      <label>Токен (или кнопкой)</label><input type="text" name="yandex_token" value="{{ src.token }}" placeholder="пусто — получить кнопкой">
+      <div style="margin-top:8px"><button type="button" class="ghost" onclick="yandexLogin()">Получить токен</button></div>
+      <div class="hint" id="yandexBox"></div>
+    {% else %}
+      <label>Фильтр плеера (пусто = любой)</label><input type="text" name="mpris_player_filter" value="{{ src.player_filter }}">
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+<!-- Discord -->
+<div class="card">
+  <h2>Discord</h2>
+  <label>Режим</label>
+  <select name="discord_mode" id="dmode" onchange="dToggle()">
+    <option value="off" {% if config.discord.mode=='off' %}selected{% endif %}>Выключено</option>
+    <option value="status" {% if config.discord.mode=='status' %}selected{% endif %}>Custom Status (мысль) — работает в облаке</option>
+    <option value="presence" {% if config.discord.mode=='presence' %}selected{% endif %}>Rich Presence — только локально</option>
+  </select>
+  <div id="dstatus" style="display:none">
+    <label>User-токен</label><input type="text" name="discord_user_token" value="{{ config.discord.user_token }}">
+    <div class="warn">⚠ Custom Status меняется только через user-токен (selfbot) — это против правил Discord, аккаунт могут забанить. На твой риск.</div>
+  </div>
+  <div id="dpresence" style="display:none">
+    <label>Application ID</label><input type="text" name="discord_client_id" value="{{ config.discord.client_id }}">
+    <p class="hint">discord.com/developers → Application ID. Нужен запущенный Discord (только дома).</p>
+  </div>
+</div>
+
+<!-- Bio -->
+<div class="card">
+  <h2>Bio <span class="tag">Telegram</span></h2>
+  <label>Шаблон (<code>{track}</code> = трек; можно текст до/после)</label>
+  <input type="text" name="bio_template" value="{{ config.bio_template }}">
+  <div class="row">
+    <div><label>Когда тишина</label><input type="text" name="bio_idle" value="{{ config.bio_idle }}" placeholder="пусто = убрать"></div>
+    <div><label>Интервал, сек</label><input type="number" name="interval" value="{{ config.interval }}" min="10"></div>
+    <div><label>Лимит</label><input type="number" name="bio_max_len" value="{{ config.bio_max_len }}"></div>
+  </div>
+</div>
+
+<button type="submit">💾 Сохранить</button>
+</form>
+{% endblock %}
+
+{% block script %}
+<script>
+async function post(u,b){const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:b?JSON.stringify(b):null});return r.json()}
+async function ctl(a){await post('/'+a);refresh()}
+function dToggle(){const m=document.getElementById('dmode').value;
+  document.getElementById('dstatus').style.display=m==='status'?'block':'none';
+  document.getElementById('dpresence').style.display=m==='presence'?'block':'none'}
+dToggle();
+
+async function tgSendCode(){const r=await post('/tg/send_code',{phone:document.getElementById('tgPhone').value});handleTg(r)}
+async function tgSignIn(){const r=await post('/tg/sign_in',{code:document.getElementById('tgCode').value,password:document.getElementById('tgPass').value});handleTg(r)}
+function handleTg(r){document.getElementById('tgErr').textContent=r.error||'';
+  if(r.step==='code'){document.getElementById('tgCodeBox').style.display='block';document.getElementById('tgSignBox').style.display='block'}
+  if(r.step==='password'){document.getElementById('tgPassBox').style.display='block'}
+  if(r.step==='done'){document.getElementById('tgDone').textContent='✓ '+r.user}}
+async function yandexLogin(){await post('/yandex/login');document.getElementById('yandexBox').textContent='Запускаю…'}
+
+async function refresh(){
+  const s=await (await fetch('/status')).json();
+  document.getElementById('dot').className='dot'+(s.running&&s.worker_alive?' on':'');
+  document.getElementById('track').textContent=s.track||'—';
+  document.getElementById('srcline').textContent=s.running?(s.worker_alive?('источник: '+(s.source||'тишина')):'воркер не отвечает'):'остановлено';
+  document.getElementById('startBtn').disabled=s.running;
+  document.getElementById('stopBtn').disabled=!s.running;
+  document.getElementById('workerTag').textContent=s.worker_alive?'воркер онлайн':'воркер офлайн';
+  const tg=document.getElementById('tgTag');
+  if(s.tg_session===null){tg.textContent='—'}
+  else if(s.tg_session.ok){tg.textContent='✓ '+(s.tg_session.name||'ок');tg.style.color='var(--accent)'}
+  else{tg.textContent='не авторизован'}
+  const y=s.yandex,yb=document.getElementById('yandexBox');
+  if(y.status==='waiting')yb.innerHTML='Открой <a href="'+y.url+'" target="_blank">'+y.url+'</a>, код: <b>'+y.code+'</b>';
+  else if(y.status==='done')yb.textContent='✓ токен сохранён';
+  else if(y.status==='error')yb.textContent='Ошибка: '+y.error;
+}
+refresh(); setInterval(refresh,3000);
+</script>
+{% endblock %}

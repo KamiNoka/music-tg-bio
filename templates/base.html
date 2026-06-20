@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Music{% endblock %}</title>
+<style>
+  :root{
+    --accent:#1db954; --accent-soft:rgba(29,185,84,.18);
+    --fg:#eaf0ec; --mut:#9bb0a4; --err:#ff6b6b;
+    --glass:rgba(255,255,255,.06); --glass-strong:rgba(255,255,255,.10);
+    --line:rgba(255,255,255,.14);
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; color:var(--fg);
+    font:15px/1.55 system-ui,Segoe UI,Roboto,sans-serif;
+    min-height:100vh;
+    background:#070b09;
+    position:relative; overflow-x:hidden;
+  }
+  /* размытые зелёные пятна-фон под стеклом */
+  body::before{
+    content:""; position:fixed; inset:-20%; z-index:-1;
+    background:
+      radial-gradient(40% 40% at 20% 25%, rgba(29,185,84,.35), transparent 70%),
+      radial-gradient(35% 35% at 80% 20%, rgba(20,120,80,.30), transparent 70%),
+      radial-gradient(45% 45% at 65% 85%, rgba(29,185,84,.20), transparent 70%);
+    filter:blur(40px); animation:drift 18s ease-in-out infinite alternate;
+  }
+  @keyframes drift{from{transform:translateY(-3%) scale(1)}to{transform:translateY(3%) scale(1.08)}}
+  .wrap{max-width:760px; margin:0 auto; padding:24px 16px 80px}
+  h1{font-size:22px; margin:0 0 2px; display:flex; align-items:center; gap:8px}
+  .sub{color:var(--mut); font-size:13px; margin:0 0 20px}
+  nav{display:flex; gap:8px; margin-bottom:18px; flex-wrap:wrap}
+  nav a{color:var(--fg); text-decoration:none; font-size:13px; padding:6px 12px;
+    border-radius:999px; background:var(--glass); border:1px solid var(--line)}
+  nav a.active{background:var(--accent-soft); border-color:var(--accent); color:#fff}
+  .card{
+    background:var(--glass); backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px);
+    border:1px solid var(--line); border-radius:18px; padding:18px; margin-bottom:16px;
+    box-shadow:0 8px 30px rgba(0,0,0,.25);
+  }
+  .card h2{font-size:14px; margin:0 0 14px; display:flex; align-items:center; gap:8px; color:var(--mut); font-weight:600; text-transform:uppercase; letter-spacing:.04em}
+  label{display:block; font-size:12px; color:var(--mut); margin:10px 0 4px}
+  input[type=text],input[type=number],input[type=password],select{
+    width:100%; background:rgba(0,0,0,.25); border:1px solid var(--line); color:var(--fg);
+    border-radius:10px; padding:10px 12px; font-size:14px}
+  input:focus,select:focus{outline:none; border-color:var(--accent)}
+  .row{display:flex; gap:10px; flex-wrap:wrap}
+  .row>div{flex:1; min-width:120px}
+  button,.btn{background:var(--accent); color:#04140b; border:0; border-radius:10px;
+    padding:10px 16px; font-size:14px; font-weight:600; cursor:pointer; text-decoration:none; display:inline-block}
+  button.ghost,.btn.ghost{background:var(--glass-strong); color:var(--fg); border:1px solid var(--line)}
+  button.stop{background:var(--err); color:#fff}
+  button:disabled{opacity:.45; cursor:default}
+  .dot{width:10px;height:10px;border-radius:50%;background:#566; display:inline-block}
+  .dot.on{background:var(--accent); box-shadow:0 0 10px var(--accent)}
+  .track{font-size:20px; font-weight:700}
+  .muted{color:var(--mut); font-size:13px}
+  .hint{font-size:12px; color:var(--mut); margin-top:6px}
+  .err{color:var(--err); font-size:13px}
+  .tag{font-size:11px; color:var(--mut); border:1px solid var(--line); border-radius:6px; padding:1px 7px; text-transform:none; letter-spacing:0}
+  .warn{background:rgba(255,107,107,.12); border:1px solid rgba(255,107,107,.4); border-radius:10px; padding:8px 10px; font-size:12px; color:#ffb0b0; margin-top:8px}
+  code{background:rgba(0,0,0,.3); padding:1px 6px; border-radius:5px; font-size:12px}
+  hr{border:0;border-top:1px solid var(--line); margin:14px 0}
+  .list{list-style:none; padding:0; margin:0}
+  .list li{display:flex; justify-content:space-between; gap:10px; padding:8px 0; border-bottom:1px solid var(--line); font-size:14px}
+  .list li:last-child{border-bottom:0}
+  .list .s{color:var(--mut); font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+{% block body %}{% endblock %}
+</div>
+{% block script %}{% endblock %}
+</body>
+</html>

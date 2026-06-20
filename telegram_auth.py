@@ -1,11 +1,12 @@
-# Логин в Telegram через Telethon — для веб-GUI (пошагово) и для CLI (интерактивно).
+# Логин в Telegram через Telethon (StringSession в БД) — для веб-GUI и CLI.
 import asyncio
 import threading
 
 from telethon import TelegramClient
 from telethon.errors import SessionPasswordNeededError
+from telethon.sessions import StringSession
 
-SESSION_NAME = "tg_session"
+import settings_store
 
 
 class _LoopThread:
@@ -27,6 +28,11 @@ class _LoopThread:
         self.loop.call_soon_threadsafe(self.loop.stop)
 
 
+def _save(client: TelegramClient):
+    """Сохраняет текущую сессию клиента как StringSession в БД."""
+    settings_store.set_session_string(StringSession.save(client.session))
+
+
 class TelegramAuth:
     """Пошаговый логин для веба. Клиент живёт между шагами на фоновом loop."""
 
@@ -43,9 +49,10 @@ class TelegramAuth:
         self.phone = phone
 
         async def _():
-            self.client = TelegramClient(SESSION_NAME, self.api_id, self.api_hash)
+            self.client = TelegramClient(StringSession(), self.api_id, self.api_hash)
             await self.client.connect()
             if await self.client.is_user_authorized():
+                _save(self.client)
                 return "already"
             sent = await self.client.send_code_request(phone)
             self.phone_code_hash = sent.phone_code_hash
@@ -66,6 +73,7 @@ class TelegramAuth:
                     return "need_password"
                 await self.client.sign_in(password=password)
             me = await self.client.get_me()
+            _save(self.client)  # сохраняем StringSession в БД
             await self.client.disconnect()
             self.client = None
             return f"ok:{me.first_name}"
@@ -73,8 +81,7 @@ class TelegramAuth:
         return self._lt.run(_())
 
     def close(self):
-        """Закрывает клиент и фоновый loop. Вызывать перед созданием нового логина,
-        чтобы не держать SQLite-сессию открытой двумя клиентами (database is locked)."""
+        """Закрывает клиент и фоновый loop (вызывать перед новым логином)."""
         try:
             if self.client is not None:
                 async def _():
@@ -89,9 +96,11 @@ class TelegramAuth:
 
 
 def is_authorized(api_id: int, api_hash: str) -> tuple[bool, str]:
-    """Проверяет, авторизована ли файловая сессия. Возвращает (bool, имя). Только когда движок стоит."""
+    """Проверяет авторизацию по StringSession из БД. Возвращает (bool, имя)."""
     async def _():
-        client = TelegramClient(SESSION_NAME, api_id, api_hash)
+        client = TelegramClient(
+            StringSession(settings_store.get_session_string()), api_id, api_hash
+        )
         await client.connect()
         ok = await client.is_user_authorized()
         name = ""
@@ -108,10 +117,13 @@ def is_authorized(api_id: int, api_hash: str) -> tuple[bool, str]:
 
 
 def cli_login(api_id: int, api_hash: str):
-    """Интерактивный логин в терминале (Telethon сам спросит телефон/код/пароль через input)."""
+    """Интерактивный логин в терминале (для VPS). Сохраняет StringSession в БД."""
     async def _():
-        client = TelegramClient(SESSION_NAME, api_id, api_hash)
+        client = TelegramClient(
+            StringSession(settings_store.get_session_string()), api_id, api_hash
+        )
         await client.start()
+        _save(client)
         me = await client.get_me()
         await client.disconnect()
         return me
